@@ -1,42 +1,105 @@
 # FireCrawl MCP Server
 
-An MCP server implementation that integrates with FireCrawl API, providing advanced web scraping capabilities with support for JavaScript-rendered sites, PDFs, and dynamic content.
+An MCP server implementation that integrates the FireCrawl API, providing advanced web scraping, crawling, and content extraction capabilities.
 
 ## Features
 
-- **Single URL Scraping**: Scrape individual URLs with advanced options
-- **Batch Scraping**: Process multiple URLs simultaneously
-- **JavaScript Support**: Handle JavaScript-rendered content
-- **PDF Parsing**: Extract content from PDF files
-- **Rate Limiting**: Built-in rate limiting to prevent API abuse
-- **Clean Output**: Returns clean markdown optimized for LLM applications
+- **Advanced Web Scraping**: Extract content with JavaScript rendering support
+- **Batch Processing**: Process multiple URLs asynchronously
+- **Flexible Output**: Support for markdown, HTML, raw HTML, screenshots
+- **Custom Actions**: Execute clicks, scrolls, and custom JavaScript before scraping
+- **Smart Extraction**: Filter main content, exclude/include specific HTML tags
+- **Structured Data**: Extract data using custom schemas and prompts
 
 ## Tools
 
-- **fire_crawl_scrape**
-  - Scrape a single URL with advanced options
-  - Inputs:
-    - `url` (string): Target URL to scrape
-    - `parsePDF` (boolean, optional): Enable/disable PDF parsing (default: true)
-    - `waitForSelector` (string, optional): CSS selector to wait for before scraping
-    - `javascript` (boolean, optional): Enable/disable JavaScript execution (default: true)
-    - `timeout` (number, optional): Maximum time to wait for page load (ms) (default: 30000)
+### `fire_crawl_scrape`
+- Execute single page scraping with advanced options
+- **Inputs:**
+  ```typescript
+  {
+    url: string;              // URL to scrape
+    formats?: string[];       // ["markdown", "html", "rawHtml", "screenshot", "links"]
+    onlyMainContent?: boolean;// Extract main content only
+    includeTags?: string[];   // HTML tags to include
+    excludeTags?: string[];   // HTML tags to exclude
+    waitFor?: number;         // Wait time in ms
+    actions?: Action[];       // Pre-scrape actions
+    mobile?: boolean;         // Use mobile viewport
+  }
+  ```
 
-- **fire_crawl_batch**
-  - Scrape multiple URLs simultaneously
-  - Inputs:
-    - `urls` (string[]): List of URLs to scrape
-    - `options` (object, optional):
-      - `parsePDF` (boolean, optional): Enable/disable PDF parsing (default: true)
-      - `javascript` (boolean, optional): Enable/disable JavaScript execution (default: true)
-      - `timeout` (number, optional): Maximum time to wait for page load (ms) (default: 30000)
+### `fire_crawl_batch_scrape`
+- Batch scrape multiple URLs asynchronously
+- **Inputs:**
+  ```typescript
+  {
+    urls: string[];          // Array of URLs to scrape
+    options?: {
+      formats?: string[];    // Output formats
+      onlyMainContent?: boolean;
+      includeTags?: string[];
+      excludeTags?: string[];
+      waitFor?: number;
+    }
+  }
+  ```
+
+### `fire_crawl_map`
+- Discover URLs from a starting point
+- **Inputs:**
+  ```typescript
+  {
+    url: string;             // Starting URL
+    search?: string;         // Filter URLs by search term
+    ignoreSitemap?: boolean; // Skip sitemap.xml
+    sitemapOnly?: boolean;   // Only use sitemap
+    includeSubdomains?: boolean;
+    limit?: number;          // Max URLs to return
+  }
+  ```
+
+### `fire_crawl_crawl`
+- Start an asynchronous crawl operation
+- **Inputs:**
+  ```typescript
+  {
+    url: string;             // Starting URL
+    excludePaths?: string[]; // Paths to exclude
+    includePaths?: string[]; // Paths to include
+    maxDepth?: number;       // Maximum link depth
+    limit?: number;          // Maximum pages
+    allowExternalLinks?: boolean;
+    deduplicateSimilarURLs?: boolean;
+    scrapeOptions?: {        // Options for each page
+      formats?: string[];
+      onlyMainContent?: boolean;
+      includeTags?: string[];
+      excludeTags?: string[];
+      waitFor?: number;
+    }
+  }
+  ```
+
+### Status Check Tools
+- `fire_crawl_check_batch_status`: Check batch job status
+- `fire_crawl_check_crawl_status`: Check crawl job status
+- **Inputs:**
+  ```typescript
+  {
+    id: string;              // Job ID to check
+  }
+  ```
 
 ## Configuration
 
 ### Getting an API Key
-1. Sign up for a FireCrawl API account
-2. Generate your API key from the developer dashboard
-3. Set the API key in your environment
+1. Sign up for a FireCrawl account
+2. Get your API key from the dashboard
+3. Set the environment variable:
+```bash
+FIRE_CRAWL_API_KEY=your_api_key
+```
 
 ### Usage with Claude Desktop
 Add this to your `claude_desktop_config.json`:
@@ -58,12 +121,6 @@ Add this to your `claude_desktop_config.json`:
 }
 ```
 
-## Rate Limiting
-
-The server implements rate limiting to prevent API abuse:
-- 2 requests per second
-- 60 requests per minute
-
 ## License
 
-This MCP server is licensed under the MIT License. This means you are free to use, modify, and distribute the software, subject to the terms and conditions of the MIT License. For more details, please see the LICENSE file in the project repository. 
+MIT License - see [LICENSE](LICENSE) for details 
