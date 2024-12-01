@@ -13,6 +13,7 @@ import FirecrawlApp, {
   type CrawlParams,
   type FirecrawlDocument,
 } from "@mendable/firecrawl-js";
+import { AxiosResponse } from "axios";
 
 // Tool definitions
 const SCRAPE_TOOL: Tool = {
@@ -482,6 +483,42 @@ if (!FIRE_CRAWL_API_KEY) {
 // Initialize FireCrawl client
 const client = new FirecrawlApp({ apiKey: FIRE_CRAWL_API_KEY });
 
+// Rate limit configuration
+const RATE_LIMIT = {
+  perMinute: 3,
+  waitTime: 25000 // 25 seconds in milliseconds
+};
+
+let requestCount = {
+  minute: 0,
+  lastReset: Date.now(),
+  nextAllowedTime: Date.now()
+};
+
+async function checkRateLimit() {
+  const now = Date.now();
+  
+  // Reset counter if minute has passed
+  if (now - requestCount.lastReset > 60000) {
+    requestCount.minute = 0;
+    requestCount.lastReset = now;
+  }
+
+  // Check if we need to wait
+  if (now < requestCount.nextAllowedTime) {
+    const waitTime = requestCount.nextAllowedTime - now;
+    throw new Error(`Rate limit exceeded. Please wait ${Math.ceil(waitTime/1000)} seconds before trying again.`);
+  }
+
+  // Check if we've hit the per-minute limit
+  if (requestCount.minute >= RATE_LIMIT.perMinute) {
+    requestCount.nextAllowedTime = now + RATE_LIMIT.waitTime;
+    throw new Error(`Rate limit exceeded. Please wait ${RATE_LIMIT.waitTime/1000} seconds before trying again.`);
+  }
+
+  requestCount.minute++;
+}
+
 // Tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -508,18 +545,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw new Error("Invalid arguments for fire_crawl_scrape");
         }
         const { url, ...options } = args;
-        const response = await client.scrapeUrl(url, options);
-        if ("error" in response) {
-          throw new Error(response.error);
+        try {
+          await checkRateLimit();
+          const response = await client.scrapeUrl(url, options);
+          if (!response.success) {
+            throw new Error(`Scraping failed: ${response.error || 'Unknown error'}`);
+          }
+          const content = response.markdown || response.html || response.rawHtml;
+          if (!content) {
+            throw new Error(`No content received from FireCrawl API. Response: ${JSON.stringify(response, null, 2)}`);
+          }
+          return {
+            content: [{ type: "text", text: content }],
+            isError: false
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error 
+            ? error.message
+            : `Scraping failed: ${JSON.stringify(error)}`;
+          return {
+            content: [{ type: "text", text: errorMessage }],
+            isError: true
+          };
         }
-        const content = response.markdown || response.html || response.rawHtml;
-        if (!content) {
-          throw new Error("No content received from FireCrawl API");
-        }
-        return {
-          content: [{ type: "text", text: content }],
-          isError: false,
-        };
       }
 
       case "fire_crawl_map": {
@@ -544,46 +592,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!isBatchScrapeOptions(args)) {
           throw new Error("Invalid arguments for fire_crawl_batch_scrape");
         }
-        const response = await client.asyncBatchScrapeUrls(
-          args.urls,
-          args.options
-        );
-        if (!response.success) {
-          throw new Error(response.error || "Failed to start batch scrape");
+        try {
+          await checkRateLimit();
+          const response = await client.asyncBatchScrapeUrls(args.urls, args.options);
+          if (!response.success) {
+            throw new Error(`Batch scrape failed: ${response.error || 'Unknown error'}`);
+          }
+          return {
+            content: [{ type: "text", text: `Started batch scrape with job ID: ${response.id}` }],
+            isError: false
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error 
+            ? error.message
+            : `Batch scrape failed: ${JSON.stringify(error)}`;
+          return {
+            content: [{ type: "text", text: errorMessage }],
+            isError: true
+          };
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Started batch scrape with job ID: ${response.id}`,
-            },
-          ],
-          isError: false,
-        };
       }
 
       case "fire_crawl_check_batch_status": {
         if (!isStatusCheckOptions(args)) {
-          throw new Error(
-            "Invalid arguments for fire_crawl_check_batch_status"
-          );
+          throw new Error("Invalid arguments for fire_crawl_check_batch_status");
         }
-        const response = await client.checkBatchScrapeStatus(args.id);
-        if (!response.success) {
-          throw new Error(response.error);
-        }
-        const status = `Batch Status:
+        try {
+          await checkRateLimit();
+          const response = await client.checkBatchScrapeStatus(args.id);
+          if (!response.success) {
+            throw new Error(`Status check failed: ${response.error || 'Unknown error'}`);
+          }
+          const status = `Batch Status:
 Status: ${response.status}
 Progress: ${response.completed}/${response.total}
 Credits Used: ${response.creditsUsed}
 Expires At: ${response.expiresAt}
-${
-  response.data.length > 0 ? "\nResults:\n" + formatResults(response.data) : ""
-}`;
-        return {
-          content: [{ type: "text", text: status }],
-          isError: false,
-        };
+${response.data.length > 0 ? '\nResults:\n' + formatResults(response.data) : ''}`;
+          return {
+            content: [{ type: "text", text: status }],
+            isError: false
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error 
+            ? error.message
+            : `Status check failed: ${JSON.stringify(error)}`;
+          return {
+            content: [{ type: "text", text: errorMessage }],
+            isError: true
+          };
+        }
       }
 
       case "fire_crawl_crawl": {
