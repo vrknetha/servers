@@ -7,6 +7,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import FirecrawlApp, {
+  type ScrapeParams,
+  type MapParams,
+  type CrawlParams,
+  type FirecrawlDocument,
+} from "@mendable/firecrawl-js";
 
 // Tool definitions
 const SCRAPE_TOOL: Tool = {
@@ -26,7 +32,15 @@ const SCRAPE_TOOL: Tool = {
         type: "array",
         items: {
           type: "string",
-          enum: ["markdown", "html", "rawHtml", "screenshot", "links"],
+          enum: [
+            "markdown",
+            "html",
+            "rawHtml",
+            "screenshot",
+            "links",
+            "screenshot@fullPage",
+            "extract",
+          ],
         },
         description: "Content formats to extract (default: ['markdown'])",
       },
@@ -61,7 +75,16 @@ const SCRAPE_TOOL: Tool = {
           properties: {
             type: {
               type: "string",
-              enum: ["wait", "click", "scroll", "type", "select"],
+              enum: [
+                "wait",
+                "click",
+                "screenshot",
+                "write",
+                "press",
+                "scroll",
+                "scrape",
+                "executeJavascript",
+              ],
               description: "Type of action to perform",
             },
             selector: {
@@ -74,24 +97,24 @@ const SCRAPE_TOOL: Tool = {
             },
             text: {
               type: "string",
-              description: "Text to type (for type action)",
+              description: "Text to write (for write action)",
             },
-            value: {
+            key: {
               type: "string",
-              description: "Value to select (for select action)",
+              description: "Key to press (for press action)",
             },
-            x: {
-              type: "number",
-              description: "X coordinate for scroll",
-            },
-            y: {
-              type: "number",
-              description: "Y coordinate for scroll",
-            },
-            behavior: {
+            direction: {
               type: "string",
-              enum: ["smooth", "auto"],
-              description: "Scroll behavior",
+              enum: ["up", "down"],
+              description: "Scroll direction",
+            },
+            script: {
+              type: "string",
+              description: "JavaScript code to execute",
+            },
+            fullPage: {
+              type: "boolean",
+              description: "Take full page screenshot",
             },
           },
           required: ["type"],
@@ -115,6 +138,33 @@ const SCRAPE_TOOL: Tool = {
           },
         },
         description: "Configuration for structured data extraction",
+      },
+      mobile: {
+        type: "boolean",
+        description: "Use mobile viewport",
+      },
+      skipTlsVerification: {
+        type: "boolean",
+        description: "Skip TLS certificate verification",
+      },
+      removeBase64Images: {
+        type: "boolean",
+        description: "Remove base64 encoded images from output",
+      },
+      location: {
+        type: "object",
+        properties: {
+          country: {
+            type: "string",
+            description: "Country code for geolocation",
+          },
+          languages: {
+            type: "array",
+            items: { type: "string" },
+            description: "Language codes for content",
+          },
+        },
+        description: "Location settings for scraping",
       },
     },
     required: ["url"],
@@ -200,8 +250,34 @@ const CRAWL_TOOL: Tool = {
         description: "Allow crawling links to external domains",
       },
       webhook: {
-        type: "string",
-        description: "Webhook URL to notify when crawl is complete",
+        oneOf: [
+          {
+            type: "string",
+            description: "Webhook URL to notify when crawl is complete",
+          },
+          {
+            type: "object",
+            properties: {
+              url: {
+                type: "string",
+                description: "Webhook URL",
+              },
+              headers: {
+                type: "object",
+                description: "Custom headers for webhook requests",
+              },
+            },
+            required: ["url"],
+          },
+        ],
+      },
+      deduplicateSimilarURLs: {
+        type: "boolean",
+        description: "Remove similar URLs during crawl",
+      },
+      ignoreQueryParameters: {
+        type: "boolean",
+        description: "Ignore query parameters when comparing URLs",
       },
       scrapeOptions: {
         type: "object",
@@ -210,7 +286,15 @@ const CRAWL_TOOL: Tool = {
             type: "array",
             items: {
               type: "string",
-              enum: ["markdown", "html", "rawHtml", "screenshot", "links"],
+              enum: [
+                "markdown",
+                "html",
+                "rawHtml",
+                "screenshot",
+                "links",
+                "screenshot@fullPage",
+                "extract",
+              ],
             },
           },
           onlyMainContent: {
@@ -235,95 +319,101 @@ const CRAWL_TOOL: Tool = {
   },
 };
 
+const BATCH_SCRAPE_TOOL: Tool = {
+  name: "fire_crawl_batch_scrape",
+  description:
+    "Scrape multiple URLs in batch mode. Returns a job ID that can be used to check status.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      urls: {
+        type: "array",
+        items: { type: "string" },
+        description: "List of URLs to scrape",
+      },
+      options: {
+        type: "object",
+        properties: {
+          formats: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: [
+                "markdown",
+                "html",
+                "rawHtml",
+                "screenshot",
+                "links",
+                "screenshot@fullPage",
+                "extract",
+              ],
+            },
+          },
+          onlyMainContent: {
+            type: "boolean",
+          },
+          includeTags: {
+            type: "array",
+            items: { type: "string" },
+          },
+          excludeTags: {
+            type: "array",
+            items: { type: "string" },
+          },
+          waitFor: {
+            type: "number",
+          },
+        },
+      },
+    },
+    required: ["urls"],
+  },
+};
+
+const CHECK_BATCH_STATUS_TOOL: Tool = {
+  name: "fire_crawl_check_batch_status",
+  description: "Check the status of a batch scraping job.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "Batch job ID to check",
+      },
+    },
+    required: ["id"],
+  },
+};
+
+const CHECK_CRAWL_STATUS_TOOL: Tool = {
+  name: "fire_crawl_check_crawl_status",
+  description: "Check the status of a crawl job.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "Crawl job ID to check",
+      },
+    },
+    required: ["id"],
+  },
+};
+
 // Type definitions
-interface ScrapeAction {
-  type: "wait" | "click" | "scroll" | "type" | "select";
-  selector?: string;
-  milliseconds?: number;
-  text?: string;
-  value?: string;
-  x?: number;
-  y?: number;
-  behavior?: "smooth" | "auto";
+interface BatchScrapeOptions {
+  urls: string[];
+  options?: Omit<ScrapeParams, "url">;
 }
 
-interface ExtractOptions {
-  schema?: object;
-  systemPrompt?: string;
-  prompt?: string;
-}
-
-interface ScrapeOptions {
-  url: string;
-  formats?: Array<"markdown" | "html" | "rawHtml" | "screenshot" | "links">;
-  onlyMainContent?: boolean;
-  includeTags?: string[];
-  excludeTags?: string[];
-  waitFor?: number;
-  timeout?: number;
-  actions?: ScrapeAction[];
-  extract?: ExtractOptions;
-}
-
-interface MapOptions {
-  url: string;
-  search?: string;
-  ignoreSitemap?: boolean;
-  sitemapOnly?: boolean;
-  includeSubdomains?: boolean;
-  limit?: number;
-}
-
-interface CrawlOptions {
-  url: string;
-  excludePaths?: string[];
-  includePaths?: string[];
-  maxDepth?: number;
-  ignoreSitemap?: boolean;
-  limit?: number;
-  allowBackwardLinks?: boolean;
-  allowExternalLinks?: boolean;
-  webhook?: string;
-  scrapeOptions?: {
-    formats?: string[];
-    onlyMainContent?: boolean;
-    includeTags?: string[];
-    excludeTags?: string[];
-    waitFor?: number;
-  };
-}
-
-// Response interfaces
-interface ScrapeResponse {
-  success: boolean;
-  data: {
-    markdown?: string;
-    html?: string;
-    rawHtml?: string;
-    screenshot?: string;
-    links?: string[];
-    metadata: {
-      title?: string;
-      description?: string;
-      sourceURL: string;
-      statusCode: number;
-    };
-  };
-}
-
-interface MapResponse {
-  success: boolean;
-  links: string[];
-}
-
-interface CrawlResponse {
-  success: boolean;
+interface StatusCheckOptions {
   id: string;
-  url: string;
 }
 
 // Type guards
-function isScrapeOptions(args: unknown): args is ScrapeOptions {
+function isScrapeOptions(
+  args: unknown
+): args is ScrapeParams & { url: string } {
   return (
     typeof args === "object" &&
     args !== null &&
@@ -332,7 +422,7 @@ function isScrapeOptions(args: unknown): args is ScrapeOptions {
   );
 }
 
-function isMapOptions(args: unknown): args is MapOptions {
+function isMapOptions(args: unknown): args is MapParams & { url: string } {
   return (
     typeof args === "object" &&
     args !== null &&
@@ -341,12 +431,31 @@ function isMapOptions(args: unknown): args is MapOptions {
   );
 }
 
-function isCrawlOptions(args: unknown): args is CrawlOptions {
+function isCrawlOptions(args: unknown): args is CrawlParams & { url: string } {
   return (
     typeof args === "object" &&
     args !== null &&
     "url" in args &&
     typeof (args as { url: unknown }).url === "string"
+  );
+}
+
+function isBatchScrapeOptions(args: unknown): args is BatchScrapeOptions {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    "urls" in args &&
+    Array.isArray((args as { urls: unknown }).urls) &&
+    (args as { urls: unknown[] }).urls.every((url) => typeof url === "string")
+  );
+}
+
+function isStatusCheckOptions(args: unknown): args is StatusCheckOptions {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    "id" in args &&
+    typeof (args as { id: unknown }).id === "string"
   );
 }
 
@@ -370,136 +479,19 @@ if (!FIRE_CRAWL_API_KEY) {
   process.exit(1);
 }
 
-// Rate limiting
-const RATE_LIMIT = {
-  perSecond: 2,
-  perMinute: 60,
-};
-
-let requestCount = {
-  second: 0,
-  minute: 0,
-  lastReset: Date.now(),
-};
-
-function checkRateLimit() {
-  const now = Date.now();
-  if (now - requestCount.lastReset > 1000) {
-    requestCount.second = 0;
-    requestCount.lastReset = now;
-  }
-  if (now - requestCount.lastReset > 60000) {
-    requestCount.minute = 0;
-  }
-  if (
-    requestCount.second >= RATE_LIMIT.perSecond ||
-    requestCount.minute >= RATE_LIMIT.perMinute
-  ) {
-    throw new Error("Rate limit exceeded");
-  }
-  requestCount.second++;
-  requestCount.minute++;
-}
-
-// API functions
-async function performScrape(options: ScrapeOptions): Promise<string> {
-  checkRateLimit();
-
-  const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${FIRE_CRAWL_API_KEY}`,
-    },
-    body: JSON.stringify(options),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(
-      `FireCrawl API error: ${response.status} ${
-        response.statusText
-      }\n${JSON.stringify(errorData)}`
-    );
-  }
-
-  const data = (await response.json()) as ScrapeResponse;
-
-  if (!data.success || !data.data) {
-    throw new Error("Invalid response from FireCrawl API");
-  }
-
-  const content = data.data.markdown || data.data.html || data.data.rawHtml;
-  if (!content) {
-    throw new Error("No content received from FireCrawl API");
-  }
-
-  return content.trim();
-}
-
-async function performMap(options: MapOptions): Promise<string[]> {
-  checkRateLimit();
-
-  const response = await fetch("https://api.firecrawl.dev/v1/map", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${FIRE_CRAWL_API_KEY}`,
-    },
-    body: JSON.stringify(options),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(
-      `FireCrawl API error: ${response.status} ${
-        response.statusText
-      }\n${JSON.stringify(errorData)}`
-    );
-  }
-
-  const data = (await response.json()) as MapResponse;
-
-  if (!data.success || !data.links) {
-    throw new Error("Invalid response from FireCrawl API");
-  }
-
-  return data.links;
-}
-
-async function performCrawl(options: CrawlOptions): Promise<string> {
-  checkRateLimit();
-
-  const response = await fetch("https://api.firecrawl.dev/v1/crawl", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${FIRE_CRAWL_API_KEY}`,
-    },
-    body: JSON.stringify(options),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(
-      `FireCrawl API error: ${response.status} ${
-        response.statusText
-      }\n${JSON.stringify(errorData)}`
-    );
-  }
-
-  const data = (await response.json()) as CrawlResponse;
-
-  if (!data.success || !data.id) {
-    throw new Error("Invalid response from FireCrawl API");
-  }
-
-  return `Started crawl ${data.id} for ${data.url}`;
-}
+// Initialize FireCrawl client
+const client = new FirecrawlApp({ apiKey: FIRE_CRAWL_API_KEY });
 
 // Tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [SCRAPE_TOOL, MAP_TOOL, CRAWL_TOOL],
+  tools: [
+    SCRAPE_TOOL,
+    MAP_TOOL,
+    CRAWL_TOOL,
+    BATCH_SCRAPE_TOOL,
+    CHECK_BATCH_STATUS_TOOL,
+    CHECK_CRAWL_STATUS_TOOL,
+  ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -515,7 +507,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!isScrapeOptions(args)) {
           throw new Error("Invalid arguments for fire_crawl_scrape");
         }
-        const content = await performScrape(args);
+        const { url, ...options } = args;
+        const response = await client.scrapeUrl(url, options);
+        if ("error" in response) {
+          throw new Error(response.error);
+        }
+        const content = response.markdown || response.html || response.rawHtml;
+        if (!content) {
+          throw new Error("No content received from FireCrawl API");
+        }
         return {
           content: [{ type: "text", text: content }],
           isError: false,
@@ -526,9 +526,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!isMapOptions(args)) {
           throw new Error("Invalid arguments for fire_crawl_map");
         }
-        const links = await performMap(args);
+        const { url, ...options } = args;
+        const response = await client.mapUrl(url, options);
+        if ("error" in response) {
+          throw new Error(response.error);
+        }
+        if (!response.links) {
+          throw new Error("No links received from FireCrawl API");
+        }
         return {
-          content: [{ type: "text", text: links.join("\n") }],
+          content: [{ type: "text", text: response.links.join("\n") }],
+          isError: false,
+        };
+      }
+
+      case "fire_crawl_batch_scrape": {
+        if (!isBatchScrapeOptions(args)) {
+          throw new Error("Invalid arguments for fire_crawl_batch_scrape");
+        }
+        const response = await client.asyncBatchScrapeUrls(
+          args.urls,
+          args.options
+        );
+        if (!response.success) {
+          throw new Error(response.error || "Failed to start batch scrape");
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Started batch scrape with job ID: ${response.id}`,
+            },
+          ],
+          isError: false,
+        };
+      }
+
+      case "fire_crawl_check_batch_status": {
+        if (!isStatusCheckOptions(args)) {
+          throw new Error(
+            "Invalid arguments for fire_crawl_check_batch_status"
+          );
+        }
+        const response = await client.checkBatchScrapeStatus(args.id);
+        if (!response.success) {
+          throw new Error(response.error);
+        }
+        const status = `Batch Status:
+Status: ${response.status}
+Progress: ${response.completed}/${response.total}
+Credits Used: ${response.creditsUsed}
+Expires At: ${response.expiresAt}
+${
+  response.data.length > 0 ? "\nResults:\n" + formatResults(response.data) : ""
+}`;
+        return {
+          content: [{ type: "text", text: status }],
           isError: false,
         };
       }
@@ -537,9 +590,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!isCrawlOptions(args)) {
           throw new Error("Invalid arguments for fire_crawl_crawl");
         }
-        const result = await performCrawl(args);
+        const { url, ...options } = args;
+        const response = await client.asyncCrawlUrl(url, options);
+        if (!response.success) {
+          throw new Error(response.error);
+        }
         return {
-          content: [{ type: "text", text: result }],
+          content: [
+            {
+              type: "text",
+              text: `Started crawl for ${url} with job ID: ${response.id}`,
+            },
+          ],
+          isError: false,
+        };
+      }
+
+      case "fire_crawl_check_crawl_status": {
+        if (!isStatusCheckOptions(args)) {
+          throw new Error(
+            "Invalid arguments for fire_crawl_check_crawl_status"
+          );
+        }
+        const response = await client.checkCrawlStatus(args.id);
+        if (!response.success) {
+          throw new Error(response.error);
+        }
+        const status = `Crawl Status:
+Status: ${response.status}
+Progress: ${response.completed}/${response.total}
+Credits Used: ${response.creditsUsed}
+Expires At: ${response.expiresAt}
+${
+  response.data.length > 0 ? "\nResults:\n" + formatResults(response.data) : ""
+}`;
+        return {
+          content: [{ type: "text", text: status }],
           isError: false,
         };
       }
@@ -564,6 +650,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
+
+// Helper function to format results
+function formatResults(data: FirecrawlDocument[]): string {
+  return data
+    .map((doc) => {
+      const content = doc.markdown || doc.html || doc.rawHtml || "No content";
+      return `URL: ${doc.url || "Unknown URL"}
+Content: ${content.substring(0, 100)}${content.length > 100 ? "..." : ""}
+${doc.metadata?.title ? `Title: ${doc.metadata.title}` : ""}`;
+    })
+    .join("\n\n");
+}
 
 // Server startup
 async function runServer() {
